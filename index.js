@@ -17,12 +17,84 @@ const eventCell = (e) => {
     return [x, y];
 };
 
+// Cells "blocked" by a queen at (qx,qy): same row, same column, the 8
+// surrounding cells, and every cell in the queen's color region. Excludes
+// the queen's own cell. Uses a Set keyed by "x,y" to avoid duplicates.
+const blockedCells = (qx, qy) => {
+    const seen = new Set();
+    const out = [];
+    const add = (x, y) => {
+        if (x === qx && y === qy) return;
+        const key = `${x},${y}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push([x, y]);
+    };
+    for (let i = 0; i < GRID_SIZE; i++) {
+        add(i, qy);
+        add(qx, i);
+    }
+    for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+            const nx = qx + dx;
+            const ny = qy + dy;
+            if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+            add(nx, ny);
+        }
+    }
+    const region = grid[qy][qx];
+    if (region) {
+        for (let y = 0; y < GRID_SIZE; y++) {
+            for (let x = 0; x < GRID_SIZE; x++) {
+                if (grid[y][x] === region) add(x, y);
+            }
+        }
+    }
+    return out;
+};
+
+// True if any queen on the board (other than one optionally excluded) blocks
+// the given cell.
+const isBlockedByAnyQueen = (x, y, exclude) => {
+    for (let qy = 0; qy < GRID_SIZE; qy++) {
+        for (let qx = 0; qx < GRID_SIZE; qx++) {
+            if (marks[qy][qx] !== "queen") continue;
+            if (exclude && qx === exclude[0] && qy === exclude[1]) continue;
+            if (qx === x && qy === y) continue;
+            if (qx === x || qy === y) return true;
+            if (Math.abs(qx - x) <= 1 && Math.abs(qy - y) <= 1) return true;
+            if (grid[qy][qx] && grid[qy][qx] === grid[y][x]) return true;
+        }
+    }
+    return false;
+};
+
+// Place a queen at (x,y) and auto-x every cell it blocks (only on empty
+// cells — don't overwrite manual x's, other queens, or existing auto-x's).
+const addQueen = (x, y) => {
+    marks[y][x] = "queen";
+    for (const [bx, by] of blockedCells(x, y)) {
+        if (marks[by][bx] === null) marks[by][bx] = "ax";
+    }
+};
+
+// Remove a queen at (x,y) and clear its auto-x's, but only on cells that
+// aren't still blocked by some other queen.
+const removeQueen = (x, y) => {
+    marks[y][x] = null;
+    for (const [bx, by] of blockedCells(x, y)) {
+        if (marks[by][bx] !== "ax") continue;
+        if (!isBlockedByAnyQueen(bx, by, [x, y])) marks[by][bx] = null;
+    }
+};
+
 // Left click on a cell toggles a queen there (clicking the same cell clears it).
 const handleLeftClick = (e) => {
     const cell = eventCell(e);
     if (!cell) return;
     const [x, y] = cell;
-    marks[y][x] = marks[y][x] === "queen" ? null : "queen";
+    if (marks[y][x] === "queen") removeQueen(x, y);
+    else addQueen(x, y);
     draw();
     checkWin();
 };
@@ -65,6 +137,7 @@ let rightDragValue = null; // "x" to paint, null to clear
 
 const applyRightDrag = (cell) => {
     const [x, y] = cell;
+    if (marks[y][x] === "queen") return;
     if (marks[y][x] !== rightDragValue) {
         marks[y][x] = rightDragValue;
         draw();
@@ -86,7 +159,8 @@ window.onload = () => {
         const cell = eventCell(e);
         if (!cell) return;
         rightDragging = true;
-        rightDragValue = marks[cell[1]][cell[0]] === "x" ? null : "x";
+        const m = marks[cell[1]][cell[0]];
+        rightDragValue = m === "x" || m === "ax" ? null : "x";
         applyRightDrag(cell);
     });
 
@@ -302,9 +376,18 @@ const reset = () => {
             marks[y][x] = null;
         }
     }
-    for (let attempt = 0; attempt < 500; attempt++) {
+    let attempts = 0;
+    while (true) {
+        attempts++;
         if (!generateBoard()) continue;
         if (countSolutions(grid, 2) === 1) break;
+        if (attempts > 5000) {
+            console.warn(
+                `Gave up finding a unique board after ${attempts} attempts; ` +
+                `using last (possibly ambiguous) board.`,
+            );
+            break;
+        }
     }
     document.getElementById("win")?.classList.remove("show");
 };
