@@ -1,6 +1,6 @@
 let canvas, ctx;
 
-const GRID_SIZE = 4;
+const GRID_SIZE = 5;
 const SQUARE_SIZE = 50;
 
 // Player-placed marks ("queen" or "x"), separate from the colored board itself.
@@ -24,6 +24,38 @@ const handleLeftClick = (e) => {
     const [x, y] = cell;
     marks[y][x] = marks[y][x] === "queen" ? null : "queen";
     draw();
+    checkWin();
+};
+
+// Returns true if the user's queen marks form a valid solution: exactly
+// GRID_SIZE queens, one per row, column, and color region, with no two
+// queens diagonally adjacent.
+const checkWin = () => {
+    const placed = [];
+    for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+            if (marks[y][x] === "queen") placed.push([x, y]);
+        }
+    }
+    if (placed.length !== GRID_SIZE) return false;
+    const cols = new Set();
+    const rows = new Set();
+    const colors = new Set();
+    for (const [x, y] of placed) {
+        if (rows.has(y) || cols.has(x) || colors.has(grid[y][x])) return false;
+        rows.add(y);
+        cols.add(x);
+        colors.add(grid[y][x]);
+    }
+    for (let i = 0; i < placed.length; i++) {
+        for (let j = i + 1; j < placed.length; j++) {
+            const [ax, ay] = placed[i];
+            const [bx, by] = placed[j];
+            if (Math.abs(ax - bx) <= 1 && Math.abs(ay - by) <= 1) return false;
+        }
+    }
+    document.getElementById("win").classList.add("show");
+    return true;
 };
 
 // Right-click drag paints x's on every cell touched, OR clears x's if the drag
@@ -71,9 +103,13 @@ window.onload = () => {
     canvas.addEventListener("mouseup", endRightDrag);
     canvas.addEventListener("mouseleave", endRightDrag);
 
+    document.getElementById("restart").addEventListener("click", () => {
+        reset();
+        loop();
+    });
+
     loop();
 };
-window.onresize = window.onload;
 
 // Repaint every cell: the region color first, then the player's mark on top.
 const draw = () => {
@@ -140,23 +176,12 @@ const grid = Array(GRID_SIZE)
             .map(() => null),
     );
 
-// Candidate cells for queen placement, in randomized order (shuffled below).
-const queenQueue = [];
-
-for (let x = 0; x < GRID_SIZE; x++) {
-    for (let y = 0; y < GRID_SIZE; y++) {
-        queenQueue.push([x, y]);
-    }
-}
-
 const shuffle = (list) => {
     for (let i = 0; i < list.length; i++) {
         const r = Math.floor(Math.random() * list.length);
         [list[i], list[r]] = [list[r], list[i]];
     }
 };
-
-shuffle(queenQueue);
 
 // Final placed queens, one per region.
 const queens = [];
@@ -197,16 +222,28 @@ const placeQueens = (row, cols) => {
     return false;
 };
 
-placeQueens(0, new Set());
+// Reset all state and generate a fresh board.
+const reset = () => {
+    queens.length = 0;
+    queue.length = 0;
+    for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+            grid[y][x] = null;
+            marks[y][x] = null;
+        }
+    }
+    placeQueens(0, new Set());
+    for (const {
+        pos: [nx, ny],
+        color,
+    } of queens) {
+        grid[ny][nx] = color;
+        queue.push(...getNeighbors(nx, ny).map((pos) => ({ pos, color })));
+    }
+    document.getElementById("win")?.classList.remove("show");
+};
 
-// Seed each queen's color into the grid and queue its neighbors for flood-fill.
-for (const {
-    pos: [nx, ny],
-    color,
-} of queens) {
-    grid[ny][nx] = color;
-    queue.push(...getNeighbors(nx, ny).map((pos) => ({ pos, color })));
-}
+reset();
 
 // Backtracking solver. Places exactly one queen per row, ensuring no two queens
 // share a column or color region, and no queen is diagonally adjacent to the
