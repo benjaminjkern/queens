@@ -1,6 +1,6 @@
 let canvas, ctx;
 
-const GRID_SIZE = 15;
+const GRID_SIZE = 4;
 const SQUARE_SIZE = 50;
 
 // Player-placed marks ("queen" or "x"), separate from the colored board itself.
@@ -8,16 +8,35 @@ const marks = Array(GRID_SIZE)
     .fill()
     .map(() => Array(GRID_SIZE).fill(null));
 
-// Translate a mouse event into a grid cell, then toggle the given mark there.
-// Clicking a cell that already has the same mark clears it.
-const handleClick = (e, mark) => {
-    e.preventDefault();
+// Translate a mouse event into a grid cell, or null if outside the board.
+const eventCell = (e) => {
     const rect = canvas.getBoundingClientRect();
     const x = Math.floor(((e.clientX - rect.left) / rect.width) * GRID_SIZE);
     const y = Math.floor(((e.clientY - rect.top) / rect.height) * GRID_SIZE);
-    if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return;
-    marks[y][x] = marks[y][x] === mark ? null : mark;
+    if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return null;
+    return [x, y];
+};
+
+// Left click on a cell toggles a queen there (clicking the same cell clears it).
+const handleLeftClick = (e) => {
+    const cell = eventCell(e);
+    if (!cell) return;
+    const [x, y] = cell;
+    marks[y][x] = marks[y][x] === "queen" ? null : "queen";
     draw();
+};
+
+// Right-click drag paints x's on every cell touched, OR clears x's if the drag
+// started on an already-x cell.
+let rightDragging = false;
+let rightDragValue = null; // "x" to paint, null to clear
+
+const applyRightDrag = (cell) => {
+    const [x, y] = cell;
+    if (marks[y][x] !== rightDragValue) {
+        marks[y][x] = rightDragValue;
+        draw();
+    }
 };
 
 window.onload = () => {
@@ -26,9 +45,31 @@ window.onload = () => {
     canvas.height = GRID_SIZE * SQUARE_SIZE;
     ctx = canvas.getContext("2d");
 
-    // Left click → queen, right click → x (contextmenu is suppressed in handleClick).
-    canvas.addEventListener("click", (e) => handleClick(e, "queen"));
-    canvas.addEventListener("contextmenu", (e) => handleClick(e, "x"));
+    // Left click → queen toggle. Right click/drag → paint x's.
+    canvas.addEventListener("click", handleLeftClick);
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    canvas.addEventListener("mousedown", (e) => {
+        if (e.button !== 2) return;
+        const cell = eventCell(e);
+        if (!cell) return;
+        rightDragging = true;
+        rightDragValue = marks[cell[1]][cell[0]] === "x" ? null : "x";
+        applyRightDrag(cell);
+    });
+
+    canvas.addEventListener("mousemove", (e) => {
+        if (!rightDragging) return;
+        const cell = eventCell(e);
+        if (!cell) return;
+        applyRightDrag(cell);
+    });
+
+    const endRightDrag = () => {
+        rightDragging = false;
+    };
+    canvas.addEventListener("mouseup", endRightDrag);
+    canvas.addEventListener("mouseleave", endRightDrag);
 
     loop();
 };
