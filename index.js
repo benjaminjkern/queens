@@ -1,6 +1,6 @@
 let canvas, ctx;
 
-const GRID_SIZE = 5;
+const GRID_SIZE = 10;
 const SQUARE_SIZE = 50;
 
 // Player-placed marks ("queen" or "x"), separate from the colored board itself.
@@ -222,23 +222,89 @@ const placeQueens = (row, cols) => {
     return false;
 };
 
-// Reset all state and generate a fresh board.
-const reset = () => {
+// Count solutions to a board, stopping as soon as we hit `limit` (so we can
+// quickly tell "unique" from "ambiguous" without enumerating everything).
+const countSolutions = (board, limit) => {
+    let count = 0;
+    const placed = [];
+    const usedCols = new Set();
+    const usedColors = new Set();
+    const recur = (row) => {
+        if (count >= limit) return;
+        if (row === GRID_SIZE) {
+            count++;
+            return;
+        }
+        for (let x = 0; x < GRID_SIZE; x++) {
+            if (usedCols.has(x)) continue;
+            const color = board[row][x];
+            if (!color || usedColors.has(color)) continue;
+            const prev = placed[row - 1];
+            if (prev !== undefined && Math.abs(prev - x) <= 1) continue;
+            placed.push(x);
+            usedCols.add(x);
+            usedColors.add(color);
+            recur(row + 1);
+            placed.pop();
+            usedCols.delete(x);
+            usedColors.delete(color);
+        }
+    };
+    recur(0);
+    return count;
+};
+
+// Run one full board-generation pass (queens + flood-fill) into the live
+// state. Returns true on success.
+const generateBoard = () => {
     queens.length = 0;
     queue.length = 0;
     for (let y = 0; y < GRID_SIZE; y++) {
         for (let x = 0; x < GRID_SIZE; x++) {
             grid[y][x] = null;
-            marks[y][x] = null;
         }
     }
-    placeQueens(0, new Set());
+    if (!placeQueens(0, new Set())) return false;
     for (const {
         pos: [nx, ny],
         color,
     } of queens) {
         grid[ny][nx] = color;
         queue.push(...getNeighbors(nx, ny).map((pos) => ({ pos, color })));
+    }
+    // Drain the flood-fill now (mutates grid) so we can validate uniqueness.
+    shuffle(queue);
+    while (queue.length) {
+        const {
+            pos: [x, y],
+            color,
+        } = queue.pop();
+        if (grid[y][x]) continue;
+        for (const neighbor of getNeighbors(x, y)) {
+            const [nx, ny] = neighbor;
+            if (grid[ny][nx]) continue;
+            queue.splice(Math.floor(Math.random() * queue.length), 0, {
+                pos: neighbor,
+                color,
+            });
+        }
+        grid[y][x] = color;
+    }
+    return true;
+};
+
+// Reset everything and regenerate until we get a board with exactly one
+// solution. The flood-fill is random, so any given queen layout might produce
+// an ambiguous board — we just retry until we land on a unique one.
+const reset = () => {
+    for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+            marks[y][x] = null;
+        }
+    }
+    for (let attempt = 0; attempt < 500; attempt++) {
+        if (!generateBoard()) continue;
+        if (countSolutions(grid, 2) === 1) break;
     }
     document.getElementById("win")?.classList.remove("show");
 };
