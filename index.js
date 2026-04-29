@@ -1,13 +1,30 @@
 let canvas, ctx;
 
-const GRID_SIZE = 10;
+const GRID_SIZE = 4;
 const SQUARE_SIZE = 50;
+
+const marks = Array(GRID_SIZE)
+    .fill()
+    .map(() => Array(GRID_SIZE).fill(null));
+
+const handleClick = (e, mark) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor(((e.clientX - rect.left) / rect.width) * GRID_SIZE);
+    const y = Math.floor(((e.clientY - rect.top) / rect.height) * GRID_SIZE);
+    if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return;
+    marks[y][x] = marks[y][x] === mark ? null : mark;
+    draw();
+};
 
 window.onload = () => {
     canvas = document.getElementById("canvas");
     canvas.width = GRID_SIZE * SQUARE_SIZE;
     canvas.height = GRID_SIZE * SQUARE_SIZE;
     ctx = canvas.getContext("2d");
+
+    canvas.addEventListener("click", (e) => handleClick(e, "queen"));
+    canvas.addEventListener("contextmenu", (e) => handleClick(e, "x"));
 
     loop();
 };
@@ -23,6 +40,19 @@ const draw = () => {
                 SQUARE_SIZE,
                 SQUARE_SIZE,
             );
+
+            const mark = marks[y][x];
+            if (mark) {
+                ctx.fillStyle = "black";
+                ctx.font = `${SQUARE_SIZE * 0.7}px serif`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(
+                    mark === "queen" ? "👑" : "✗",
+                    x * SQUARE_SIZE + SQUARE_SIZE / 2,
+                    y * SQUARE_SIZE + SQUARE_SIZE / 2,
+                );
+            }
         }
     }
 };
@@ -115,5 +145,29 @@ outer: while (queens.length < GRID_SIZE) {
 }
 
 const solve = (board) => {
-    const { grid, queens };
+    const placed = [];
+    const usedCols = new Set();
+    const usedColors = new Set();
+
+    const place = (row) => {
+        if (row === GRID_SIZE) return true;
+        for (let x = 0; x < GRID_SIZE; x++) {
+            if (usedCols.has(x)) continue;
+            const color = board[row][x];
+            if (!color || usedColors.has(color)) continue;
+            const prev = placed[row - 1];
+            if (prev && Math.abs(prev - x) <= 1) continue;
+
+            placed.push(x);
+            usedCols.add(x);
+            usedColors.add(color);
+            if (place(row + 1)) return true;
+            placed.pop();
+            usedCols.delete(x);
+            usedColors.delete(color);
+        }
+        return false;
+    };
+
+    return place(0) ? placed.map((x, y) => [x, y]) : null;
 };
