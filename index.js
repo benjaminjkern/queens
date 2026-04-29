@@ -2,6 +2,34 @@ import { generateUniqueBoard } from "./generation.js";
 
 let canvas, ctx;
 
+// Timer: starts on the first click of a new game, stops on win.
+let timerStart = null;
+let timerInterval = null;
+const formatTime = (ms) => {
+    const s = Math.floor(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+const startTimer = () => {
+    if (timerStart !== null) return;
+    timerStart = performance.now();
+    timerInterval = setInterval(() => {
+        document.getElementById("timer").textContent = formatTime(
+            performance.now() - timerStart,
+        );
+    }, 250);
+};
+const stopTimer = () => {
+    if (timerInterval !== null) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+};
+const resetTimer = () => {
+    stopTimer();
+    timerStart = null;
+    document.getElementById("timer").textContent = "0:00";
+};
+
 const GRID_SIZE = 11;
 const SQUARE_SIZE = 50;
 
@@ -95,6 +123,7 @@ const removeQueen = (x, y) => {
 const handleLeftClick = (e) => {
     const cell = eventCell(e);
     if (!cell) return;
+    startTimer();
     const [x, y] = cell;
     if (marks[y][x] === "queen") removeQueen(x, y);
     else addQueen(x, y);
@@ -129,6 +158,7 @@ const checkWin = () => {
             if (Math.abs(ax - bx) <= 1 && Math.abs(ay - by) <= 1) return false;
         }
     }
+    stopTimer();
     document.getElementById("win").classList.add("show");
     return true;
 };
@@ -164,6 +194,7 @@ window.onload = () => {
         if (e.button !== 2) return;
         const cell = eventCell(e);
         if (!cell) return;
+        startTimer();
         rightDragging = true;
         const m = marks[cell[1]][cell[0]];
         rightDragValue = m === "x" || m === "ax" ? null : "x";
@@ -246,6 +277,7 @@ const reset = () => {
     if (stats.found) console.log(`Unique board in ${msg}.`);
     else console.warn(`Gave up after ${msg} — board may be ambiguous.`);
     document.getElementById("win")?.classList.remove("show");
+    resetTimer();
 };
 
 reset();

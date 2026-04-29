@@ -9,10 +9,17 @@
     }
     body {
       display: flex;
+      flex-direction: column;
       align-items: center;
       justify-content: center;
       background: #222;
       font-family: sans-serif;
+      gap: 12px;
+    }
+    #timer {
+      color: white;
+      font-size: 1.5em;
+      font-variant-numeric: tabular-nums;
     }
     #wrap {
       position: relative;
@@ -47,6 +54,7 @@
 </head>
 
 <body>
+  <div id="timer">0:00</div>
   <div id="wrap">
     <canvas id="canvas"></canvas>
     <div id="win">
