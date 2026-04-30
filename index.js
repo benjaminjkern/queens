@@ -30,7 +30,7 @@ const resetTimer = () => {
     document.getElementById("timer").textContent = "0:00";
 };
 
-const GRID_SIZE = 11;
+const GRID_SIZE = 12;
 const SQUARE_SIZE = 50;
 
 // Player-placed marks ("queen" or "x"), separate from the colored board itself.

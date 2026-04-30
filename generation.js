@@ -62,6 +62,10 @@ export const generateUniqueBoard = (N) => {
         return recur(0);
     };
 
+    // Uniform-random flood-fill: pick a random frontier cell to claim each
+    // step. We tried biasing toward cells closer to their region's queen but
+    // it sharply increased alt-solution counts (compact, predictable region
+    // shapes admit easy column-swap alternates).
     const fastFloodFill = () => {
         regionGrid.fill(-1);
         let qLen = 0;
@@ -262,6 +266,14 @@ export const generateUniqueBoard = (N) => {
         return count === total;
     };
 
+    // Simple greedy reshape: iterate cells by alt score (highest first), for
+    // each cell try recoloring into the smallest adjacent region that keeps
+    // both regions connected. Commits the first viable move.
+    //
+    // (We tried K-lookahead — apply each tentative move and recount alts to
+    // pick the best — but on big N alt counts saturate the lookahead cap so
+    // every move looks the same, and the lookahead's per-reshape cost cuts
+    // throughput by ~3-4×. Plain greedy gets more reshapes per unit time.)
     const reshapeOnce = () => {
         const alts = collectAltScores(8);
         if (alts === 0) return false;
@@ -301,46 +313,65 @@ export const generateUniqueBoard = (N) => {
     };
 
     // === Search loop ====================================================
-    const TIME_BUDGET_MS = 3000;
-    const CALIBRATE_BATCH = 30;
+    const TIME_BUDGET_MS = 30000;
     const PER_ATTEMPT_RESHAPES = 30;
-    const HARD_CAP = 1_000_000;
+    const BEST_PROBE_LIMIT = 16; // upper bound on alt count we bother tracking
     const start = performance.now();
+    const deadline = start + TIME_BUDGET_MS;
     let attempts = 0;
     let totalReshapes = 0;
     let found = false;
+
+    // Best-of-attempts cache: snapshot of regionGrid that had the lowest alt
+    // count we ever saw. Used as the fallback if we never reach uniqueness.
+    const bestRegionGrid = new Int8Array(NN);
+    let bestAltCount = Infinity;
+    const snapshotIfBetter = () => {
+        const c = fastCount(BEST_PROBE_LIMIT);
+        if (c < bestAltCount) {
+            bestAltCount = c;
+            bestRegionGrid.set(regionGrid);
+        }
+    };
 
     const tryAttempt = () => {
         if (!fastPlaceQueens()) return false;
         fastFloodFill();
         if (fastCount(2) === 1) return true;
         for (let i = 0; i < PER_ATTEMPT_RESHAPES; i++) {
-            if (!reshapeOnce()) return false;
+            if (!reshapeOnce()) break;
             totalReshapes++;
             if (fastCount(2) === 1) return true;
+            // Check time often — single attempts can be expensive on big N.
+            if (performance.now() > deadline) break;
         }
+        snapshotIfBetter();
         return false;
     };
 
-    for (let i = 0; i < CALIBRATE_BATCH; i++) {
+    // Reserve ~10% of the budget for the final reshape pass on the best
+    // snapshot, so we don't blow through it during the search and give the
+    // fallback no chance to run.
+    const searchDeadline = start + TIME_BUDGET_MS * 0.9;
+    while (performance.now() < searchDeadline) {
         attempts++;
         if (tryAttempt()) {
             found = true;
             break;
         }
     }
-    if (!found) {
-        const elapsed = performance.now() - start;
-        const perAttempt = elapsed / attempts;
-        const remaining = TIME_BUDGET_MS - elapsed;
-        const projected = Math.max(0, Math.floor(remaining / perAttempt));
-        const cap = Math.min(projected, HARD_CAP);
-        for (let i = 0; i < cap; i++) {
-            attempts++;
-            if (tryAttempt()) {
+
+    // Fallback: restore best-seen board and reshape until time runs out.
+    // Often the last attempt is *worse* than something we saw earlier.
+    if (!found && bestAltCount !== Infinity) {
+        regionGrid.set(bestRegionGrid);
+        while (performance.now() < deadline) {
+            if (fastCount(2) === 1) {
                 found = true;
                 break;
             }
+            if (!reshapeOnce()) break;
+            totalReshapes++;
         }
     }
 
@@ -363,6 +394,9 @@ export const generateUniqueBoard = (N) => {
             attempts,
             reshapes: totalReshapes,
             elapsedMs: performance.now() - start,
+            // For debugging: how close did we get on the final board?
+            finalAltCount: fastCount(BEST_PROBE_LIMIT),
+            bestAltCount: bestAltCount === Infinity ? null : bestAltCount,
         },
     };
 };
