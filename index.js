@@ -2,21 +2,25 @@ import { generateUniqueBoard } from "./generation.js";
 
 let canvas, ctx;
 
-// Timer: starts on the first click of a new game, stops on win.
-let timerStart = null;
+// Timer: starts on the first click of a new game, can be paused, stops on win.
+let timerStart = null; // performance.now() - elapsedSoFar; null when stopped
 let timerInterval = null;
-const formatTime = (ms) => {
-    const s = Math.floor(ms / 1000);
-    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+let pausedElapsed = null; // ms when the timer was paused, or null
+const renderTimer = () => {
+    const elapsed =
+        pausedElapsed !== null
+            ? pausedElapsed
+            : timerStart !== null
+              ? performance.now() - timerStart
+              : 0;
+    const s = Math.floor(elapsed / 1000);
+    document.getElementById("timer").textContent =
+        `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 const startTimer = () => {
-    if (timerStart !== null) return;
+    if (timerStart !== null || pausedElapsed !== null) return;
     timerStart = performance.now();
-    timerInterval = setInterval(() => {
-        document.getElementById("timer").textContent = formatTime(
-            performance.now() - timerStart,
-        );
-    }, 250);
+    timerInterval = setInterval(renderTimer, 250);
 };
 const stopTimer = () => {
     if (timerInterval !== null) {
@@ -24,19 +28,37 @@ const stopTimer = () => {
         timerInterval = null;
     }
 };
+const pauseTimer = () => {
+    if (timerStart === null) return;
+    pausedElapsed = performance.now() - timerStart;
+    stopTimer();
+    timerStart = null;
+};
+const resumeTimer = () => {
+    if (pausedElapsed === null) return;
+    timerStart = performance.now() - pausedElapsed;
+    pausedElapsed = null;
+    timerInterval = setInterval(renderTimer, 250);
+};
 const resetTimer = () => {
     stopTimer();
     timerStart = null;
-    document.getElementById("timer").textContent = "0:00";
+    pausedElapsed = null;
+    renderTimer();
 };
 
-const GRID_SIZE = 12;
+let GRID_SIZE = 10;
 const SQUARE_SIZE = 50;
+const MIN_SIZE = 4;
+const MAX_SIZE = 15;
+
+const makeGrid = (N, value) =>
+    Array(N)
+        .fill()
+        .map(() => Array(N).fill(value));
 
 // Player-placed marks ("queen" or "x"), separate from the colored board itself.
-const marks = Array(GRID_SIZE)
-    .fill()
-    .map(() => Array(GRID_SIZE).fill(null));
+let marks = makeGrid(GRID_SIZE, null);
 
 // Translate a mouse event into a grid cell, or null if outside the board.
 const eventCell = (e) => {
@@ -177,17 +199,46 @@ const applyRightDrag = (cell) => {
     }
 };
 
+// Toggle x-mark at a cell (used by ctrl/cmd+click for trackpad users).
+const toggleXAt = (x, y) => {
+    const m = marks[y][x];
+    if (m === "queen") return;
+    marks[y][x] = m === "x" || m === "ax" ? null : "x";
+};
+
 window.onload = () => {
     canvas = document.getElementById("canvas");
     canvas.width = GRID_SIZE * SQUARE_SIZE;
     canvas.height = GRID_SIZE * SQUARE_SIZE;
     ctx = canvas.getContext("2d");
 
-    // Left click → queen toggle on mousedown. Right click/drag → paint x's.
+    // Populate the size dropdown.
+    const sizeSelect = document.getElementById("size");
+    for (let n = MIN_SIZE; n <= MAX_SIZE; n++) {
+        const opt = document.createElement("option");
+        opt.value = String(n);
+        opt.textContent = `${n}×${n}`;
+        if (n === GRID_SIZE) opt.selected = true;
+        sizeSelect.appendChild(opt);
+    }
+    sizeSelect.addEventListener("change", () => {
+        setBoardSize(parseInt(sizeSelect.value, 10));
+    });
+
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
     canvas.addEventListener("mousedown", (e) => {
+        if (isPaused) return;
         if (e.button === 0) {
+            // Ctrl/Cmd + left click → toggle x (trackpad-friendly).
+            if (e.ctrlKey || e.metaKey) {
+                const cell = eventCell(e);
+                if (!cell) return;
+                startTimer();
+                toggleXAt(cell[0], cell[1]);
+                draw();
+                return;
+            }
             handleLeftClick(e);
             return;
         }
@@ -202,7 +253,7 @@ window.onload = () => {
     });
 
     canvas.addEventListener("mousemove", (e) => {
-        if (!rightDragging) return;
+        if (!rightDragging || isPaused) return;
         const cell = eventCell(e);
         if (!cell) return;
         applyRightDrag(cell);
@@ -218,6 +269,15 @@ window.onload = () => {
         reset();
         draw();
     });
+    document.getElementById("newGame").addEventListener("click", () => {
+        reset();
+        draw();
+    });
+    document.getElementById("pause").addEventListener("click", () => {
+        if (isPaused) resumeGame();
+        else pauseGame();
+    });
+    document.getElementById("resume").addEventListener("click", resumeGame);
 
     draw();
 };
@@ -251,33 +311,55 @@ const draw = () => {
 };
 
 // The board itself: grid[y][x] holds the region color of that cell, or null.
-const grid = Array(GRID_SIZE)
-    .fill()
-    .map(() =>
-        Array(GRID_SIZE)
-            .fill()
-            .map(() => null),
-    );
+let grid = makeGrid(GRID_SIZE, null);
 
+// Generate a fresh board at the current GRID_SIZE and reset marks/timer.
+// Does not draw; the caller should call draw() once everything is ready.
 const reset = () => {
-    for (let y = 0; y < GRID_SIZE; y++) {
-        for (let x = 0; x < GRID_SIZE; x++) {
-            marks[y][x] = null;
-        }
-    }
+    marks = makeGrid(GRID_SIZE, null);
     const { grid: newGrid, stats } = generateUniqueBoard(GRID_SIZE);
-    for (let y = 0; y < GRID_SIZE; y++) {
-        for (let x = 0; x < GRID_SIZE; x++) {
-            grid[y][x] = newGrid[y][x];
-        }
-    }
+    grid = newGrid;
     const msg =
         `${stats.attempts} attempts (${stats.reshapes} reshapes) ` +
         `in ${stats.elapsedMs.toFixed(0)}ms`;
     if (stats.found) console.log(`Unique board in ${msg}.`);
     else console.warn(`Gave up after ${msg} — board may be ambiguous.`);
     document.getElementById("win")?.classList.remove("show");
+    resumePauseUI(false);
     resetTimer();
+};
+
+// Apply a new board size: resize the canvas, regenerate, reset.
+const setBoardSize = (n) => {
+    GRID_SIZE = Math.max(MIN_SIZE, Math.min(MAX_SIZE, n));
+    if (canvas) {
+        canvas.width = GRID_SIZE * SQUARE_SIZE;
+        canvas.height = GRID_SIZE * SQUARE_SIZE;
+    }
+    reset();
+    draw();
+};
+
+// Pause overlay covers the canvas (so the board isn't visible) and pauses
+// the timer. Resuming reveals the board and continues from where the timer
+// left off.
+let isPaused = false;
+const pauseGame = () => {
+    if (isPaused) return;
+    isPaused = true;
+    pauseTimer();
+    document.getElementById("pauseOverlay").classList.add("show");
+};
+const resumePauseUI = (paused) => {
+    isPaused = paused;
+    const ov = document.getElementById("pauseOverlay");
+    if (paused) ov?.classList.add("show");
+    else ov?.classList.remove("show");
+};
+const resumeGame = () => {
+    if (!isPaused) return;
+    resumePauseUI(false);
+    resumeTimer();
 };
 
 reset();

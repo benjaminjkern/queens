@@ -16,10 +16,42 @@
       font-family: sans-serif;
       gap: 12px;
     }
-    #timer {
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 20px;
       color: white;
+      font-size: 1.2em;
+    }
+    #timer {
       font-size: 1.5em;
       font-variant-numeric: tabular-nums;
+      min-width: 4ch;
+      text-align: center;
+    }
+    #controls select, #controls button {
+      font-size: 1em;
+      padding: 4px 12px;
+      cursor: pointer;
+    }
+    #controls label { display: inline-flex; align-items: center; gap: 6px; }
+    #pauseOverlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.85);
+      color: white;
+      gap: 16px;
+    }
+    #pauseOverlay.show { display: flex; }
+    #pauseOverlay h1 { margin: 0; font-size: 2em; }
+    #pauseOverlay button {
+      font-size: 1.2em;
+      padding: 8px 20px;
+      cursor: pointer;
     }
     #wrap {
       position: relative;
@@ -54,9 +86,18 @@
 </head>
 
 <body>
-  <div id="timer">0:00</div>
+  <div id="controls">
+    <span id="timer">0:00</span>
+    <label>Size: <select id="size"></select></label>
+    <button id="pause">Pause</button>
+    <button id="newGame">New Game</button>
+  </div>
   <div id="wrap">
     <canvas id="canvas"></canvas>
+    <div id="pauseOverlay">
+      <h1>⏸ Paused</h1>
+      <button id="resume">Resume</button>
+    </div>
     <div id="win">
       <h1>🎉 You won! 🎉</h1>
       <button id="restart">Play again</button>
