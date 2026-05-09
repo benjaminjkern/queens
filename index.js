@@ -49,6 +49,9 @@ const resetTimer = () => {
 
 let GRID_SIZE = 10;
 const SQUARE_SIZE = 50;
+// Coarse pointer ⇒ touch device. Used to switch tap behavior on mobile, since
+// there's no right-click: a tap cycles empty → x → queen → empty.
+const isMobile = window.matchMedia("(pointer: coarse)").matches;
 const MIN_SIZE = 4;
 const MAX_SIZE = 15;
 
@@ -222,6 +225,22 @@ window.onload = () => {
 
     canvas.addEventListener("mousedown", (e) => {
         if (isPaused) return;
+        // On mobile, tap cycles empty → x → queen → empty in one button.
+        if (isMobile && e.button === 0) {
+            const cell = eventCell(e);
+            if (!cell) return;
+            startTimer();
+            const [x, y] = cell;
+            const m = marks[y][x];
+            if (m === null) marks[y][x] = "x";
+            else if (m === "x" || m === "ax") {
+                marks[y][x] = null;
+                addQueen(x, y);
+            } else removeQueen(x, y);
+            draw();
+            checkWin();
+            return;
+        }
         // Ctrl/Cmd + left mousedown is treated identically to right mousedown
         // (trackpad-friendly): starts an x-paint drag based on the start cell.
         const isXAction =
