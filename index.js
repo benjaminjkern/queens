@@ -199,13 +199,6 @@ const applyRightDrag = (cell) => {
     }
 };
 
-// Toggle x-mark at a cell (used by ctrl/cmd+click for trackpad users).
-const toggleXAt = (x, y) => {
-    const m = marks[y][x];
-    if (m === "queen") return;
-    marks[y][x] = m === "x" || m === "ax" ? null : "x";
-};
-
 window.onload = () => {
     canvas = document.getElementById("canvas");
     canvas.width = GRID_SIZE * SQUARE_SIZE;
@@ -229,27 +222,21 @@ window.onload = () => {
 
     canvas.addEventListener("mousedown", (e) => {
         if (isPaused) return;
-        if (e.button === 0) {
-            // Ctrl/Cmd + left click → toggle x (trackpad-friendly).
-            if (e.ctrlKey || e.metaKey) {
-                const cell = eventCell(e);
-                if (!cell) return;
-                startTimer();
-                toggleXAt(cell[0], cell[1]);
-                draw();
-                return;
-            }
-            handleLeftClick(e);
+        // Ctrl/Cmd + left mousedown is treated identically to right mousedown
+        // (trackpad-friendly): starts an x-paint drag based on the start cell.
+        const isXAction =
+            e.button === 2 || (e.button === 0 && (e.ctrlKey || e.metaKey));
+        if (isXAction) {
+            const cell = eventCell(e);
+            if (!cell) return;
+            startTimer();
+            rightDragging = true;
+            const m = marks[cell[1]][cell[0]];
+            rightDragValue = m === "x" || m === "ax" ? null : "x";
+            applyRightDrag(cell);
             return;
         }
-        if (e.button !== 2) return;
-        const cell = eventCell(e);
-        if (!cell) return;
-        startTimer();
-        rightDragging = true;
-        const m = marks[cell[1]][cell[0]];
-        rightDragValue = m === "x" || m === "ax" ? null : "x";
-        applyRightDrag(cell);
+        if (e.button === 0) handleLeftClick(e);
     });
 
     canvas.addEventListener("mousemove", (e) => {
@@ -265,21 +252,15 @@ window.onload = () => {
     canvas.addEventListener("mouseup", endRightDrag);
     canvas.addEventListener("mouseleave", endRightDrag);
 
-    document.getElementById("restart").addEventListener("click", () => {
-        reset();
-        draw();
-    });
-    document.getElementById("newGame").addEventListener("click", () => {
-        reset();
-        draw();
-    });
+    document.getElementById("restart").addEventListener("click", reset);
+    document.getElementById("newGame").addEventListener("click", reset);
     document.getElementById("pause").addEventListener("click", () => {
         if (isPaused) resumeGame();
         else pauseGame();
     });
     document.getElementById("resume").addEventListener("click", resumeGame);
 
-    draw();
+    reset();
 };
 
 // Repaint every cell: the region color first, then the player's mark on top.
@@ -313,9 +294,23 @@ const draw = () => {
 // The board itself: grid[y][x] holds the region color of that cell, or null.
 let grid = makeGrid(GRID_SIZE, null);
 
+// Yield twice via rAF so the browser actually paints any overlays we just
+// toggled before we block the main thread on generation.
+const yieldToBrowser = () =>
+    new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+
 // Generate a fresh board at the current GRID_SIZE and reset marks/timer.
-// Does not draw; the caller should call draw() once everything is ready.
-const reset = () => {
+// Shows a loading spinner while the (synchronous) generator runs, then
+// redraws the board.
+const reset = async () => {
+    document.getElementById("win")?.classList.remove("show");
+    document.getElementById("loadingOverlay")?.classList.add("show");
+    resumePauseUI(false);
+    resetTimer();
+    await yieldToBrowser();
+
     marks = makeGrid(GRID_SIZE, null);
     const { grid: newGrid, stats } = generateUniqueBoard(GRID_SIZE);
     grid = newGrid;
@@ -324,20 +319,19 @@ const reset = () => {
         `in ${stats.elapsedMs.toFixed(0)}ms`;
     if (stats.found) console.log(`Unique board in ${msg}.`);
     else console.warn(`Gave up after ${msg} — board may be ambiguous.`);
-    document.getElementById("win")?.classList.remove("show");
-    resumePauseUI(false);
-    resetTimer();
+
+    document.getElementById("loadingOverlay")?.classList.remove("show");
+    if (ctx) draw();
 };
 
 // Apply a new board size: resize the canvas, regenerate, reset.
-const setBoardSize = (n) => {
+const setBoardSize = async (n) => {
     GRID_SIZE = Math.max(MIN_SIZE, Math.min(MAX_SIZE, n));
     if (canvas) {
         canvas.width = GRID_SIZE * SQUARE_SIZE;
         canvas.height = GRID_SIZE * SQUARE_SIZE;
     }
-    reset();
-    draw();
+    await reset();
 };
 
 // Pause overlay covers the canvas (so the board isn't visible) and pauses
@@ -361,5 +355,3 @@ const resumeGame = () => {
     resumePauseUI(false);
     resumeTimer();
 };
-
-reset();
