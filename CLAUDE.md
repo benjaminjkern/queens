@@ -156,7 +156,10 @@ roughly an order of magnitude fewer per N added.
 
 ### What was tried and rejected
 
-If you're tempted to add these, read this first.
+If you're tempted to add these, read this first. Whole-algorithm rewrites
+that were attempted and abandoned are documented separately in
+[EXPERIMENTS.md](EXPERIMENTS.md) — read that before proposing another
+"replace the generator with X" approach.
 
 **Distance-weighted flood-fill** (commit history under "smarter seeding"). At
 each pop, with probability `p` pick the frontier cell closest to its region's
