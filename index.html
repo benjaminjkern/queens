@@ -1,11 +1,14 @@
 <html>
 
 <head>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <script src="index.js" type="module"></script>
   <style>
     html, body {
       margin: 0;
       height: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
     }
     body {
       display: flex;
@@ -85,6 +88,10 @@
       max-width: 100vw;
       max-height: 100vh;
       object-fit: contain;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
     }
     #win {
       position: absolute;

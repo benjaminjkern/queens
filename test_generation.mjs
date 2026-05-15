@@ -84,13 +84,9 @@ const fmt = (n, digits = 0) =>
 
 const runSize = (N, trials) => {
     console.log(`\n=== N=${N}, ${trials} trials ===`);
-    const found = [];
     const attempts = [];
     const reshapes = [];
     const times = [];
-    const finalAlts = [];
-    const bestAlts = [];
-    let successes = 0;
     let verifyFails = 0;
 
     for (let i = 0; i < trials; i++) {
@@ -100,26 +96,17 @@ const runSize = (N, trials) => {
         attempts.push(s.attempts);
         reshapes.push(s.reshapes);
         times.push(elapsed);
-        finalAlts.push(s.finalAltCount);
-        if (s.bestAltCount !== null) bestAlts.push(s.bestAltCount);
-        if (s.found) successes++;
 
         if (verify) {
             const { count, regionCount } = countSolutions(grid, 3);
-            const ok = count === 1 && regionCount === N;
-            if (s.found && !ok) {
+            if (count !== 1 || regionCount !== N) {
                 verifyFails++;
                 console.log(
-                    `  trial ${i}: claimed unique but verify says ` +
-                        `solutions=${count} regions=${regionCount}`,
+                    `  trial ${i}: verify says solutions=${count} regions=${regionCount}`,
                 );
             }
-            if (!s.found && count === 1) {
-                // generator gave up but the result happens to be unique
-                successes++;
-            }
         }
-        process.stdout.write(s.found ? "." : "x");
+        process.stdout.write(".");
     }
     process.stdout.write("\n");
 
@@ -127,10 +114,7 @@ const runSize = (N, trials) => {
     const rS = stats(reshapes);
     const tS = stats(times);
 
-    console.log(
-        `  success: ${successes}/${trials}` +
-            (verify ? `  verify-fail: ${verifyFails}` : ""),
-    );
+    if (verify) console.log(`  verify-fail: ${verifyFails}`);
     console.log(
         `  attempts:  mean=${fmt(aS.mean, 1)} median=${fmt(aS.median)}  p95=${fmt(aS.p95)}  max=${fmt(aS.max)}`,
     );
@@ -139,14 +123,6 @@ const runSize = (N, trials) => {
     );
     console.log(
         `  time(ms):  mean=${fmt(tS.mean, 1)} median=${fmt(tS.median, 1)}  p95=${fmt(tS.p95, 1)}  max=${fmt(tS.max, 1)}`,
-    );
-    const faS = stats(finalAlts);
-    const baS = stats(bestAlts);
-    console.log(
-        `  finalAlt:  mean=${fmt(faS.mean, 1)} median=${fmt(faS.median)}  max=${fmt(faS.max)}` +
-            (baS
-                ? `   bestAlt: mean=${fmt(baS.mean, 1)} median=${fmt(baS.median)}`
-                : ""),
     );
 };
 

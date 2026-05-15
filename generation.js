@@ -313,26 +313,14 @@ export const generateUniqueBoard = (N) => {
     };
 
     // === Search loop ====================================================
-    const TIME_BUDGET_MS = 30000;
+    // No time budget — keep trying until we find a uniquely solvable board.
+    // For large N this may take a long time; the caller is expected to show
+    // a loading indicator.
     const PER_ATTEMPT_RESHAPES = 30;
-    const BEST_PROBE_LIMIT = 16; // upper bound on alt count we bother tracking
+    const BEST_PROBE_LIMIT = 16;
     const start = performance.now();
-    const deadline = start + TIME_BUDGET_MS;
     let attempts = 0;
     let totalReshapes = 0;
-    let found = false;
-
-    // Best-of-attempts cache: snapshot of regionGrid that had the lowest alt
-    // count we ever saw. Used as the fallback if we never reach uniqueness.
-    const bestRegionGrid = new Int8Array(NN);
-    let bestAltCount = Infinity;
-    const snapshotIfBetter = () => {
-        const c = fastCount(BEST_PROBE_LIMIT);
-        if (c < bestAltCount) {
-            bestAltCount = c;
-            bestRegionGrid.set(regionGrid);
-        }
-    };
 
     const tryAttempt = () => {
         if (!fastPlaceQueens()) return false;
@@ -342,37 +330,13 @@ export const generateUniqueBoard = (N) => {
             if (!reshapeOnce()) break;
             totalReshapes++;
             if (fastCount(2) === 1) return true;
-            // Check time often — single attempts can be expensive on big N.
-            if (performance.now() > deadline) break;
         }
-        snapshotIfBetter();
         return false;
     };
 
-    // Reserve ~10% of the budget for the final reshape pass on the best
-    // snapshot, so we don't blow through it during the search and give the
-    // fallback no chance to run.
-    const searchDeadline = start + TIME_BUDGET_MS * 0.9;
-    while (performance.now() < searchDeadline) {
+    while (true) {
         attempts++;
-        if (tryAttempt()) {
-            found = true;
-            break;
-        }
-    }
-
-    // Fallback: restore best-seen board and reshape until time runs out.
-    // Often the last attempt is *worse* than something we saw earlier.
-    if (!found && bestAltCount !== Infinity) {
-        regionGrid.set(bestRegionGrid);
-        while (performance.now() < deadline) {
-            if (fastCount(2) === 1) {
-                found = true;
-                break;
-            }
-            if (!reshapeOnce()) break;
-            totalReshapes++;
-        }
+        if (tryAttempt()) break;
     }
 
     // Project regionGrid → 2D color grid with one random hex color per region.
@@ -390,13 +354,9 @@ export const generateUniqueBoard = (N) => {
     return {
         grid,
         stats: {
-            found,
             attempts,
             reshapes: totalReshapes,
             elapsedMs: performance.now() - start,
-            // For debugging: how close did we get on the final board?
-            finalAltCount: fastCount(BEST_PROBE_LIMIT),
-            bestAltCount: bestAltCount === Infinity ? null : bestAltCount,
         },
     };
 };

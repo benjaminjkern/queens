@@ -63,14 +63,15 @@ const makeGrid = (N, value) =>
 // Player-placed marks ("queen" or "x"), separate from the colored board itself.
 let marks = makeGrid(GRID_SIZE, null);
 
-// Translate a mouse event into a grid cell, or null if outside the board.
-const eventCell = (e) => {
+// Translate client coordinates into a grid cell, or null if outside the board.
+const cellAt = (clientX, clientY) => {
     const rect = canvas.getBoundingClientRect();
-    const x = Math.floor(((e.clientX - rect.left) / rect.width) * GRID_SIZE);
-    const y = Math.floor(((e.clientY - rect.top) / rect.height) * GRID_SIZE);
+    const x = Math.floor(((clientX - rect.left) / rect.width) * GRID_SIZE);
+    const y = Math.floor(((clientY - rect.top) / rect.height) * GRID_SIZE);
     if (x < 0 || x >= GRID_SIZE || y < 0 || y >= GRID_SIZE) return null;
     return [x, y];
 };
+const eventCell = (e) => cellAt(e.clientX, e.clientY);
 
 // Cells "blocked" by a queen at (qx,qy): same row, same column, the 8
 // surrounding cells, and every cell in the queen's color region. Excludes
@@ -223,53 +224,130 @@ window.onload = () => {
 
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
-    canvas.addEventListener("mousedown", (e) => {
-        if (isPaused) return;
-        // On mobile, tap cycles empty → x → queen → empty in one button.
-        if (isMobile && e.button === 0) {
-            const cell = eventCell(e);
-            if (!cell) return;
-            startTimer();
+    if (isMobile) {
+        // Mobile: explicit touch handlers. preventDefault on touchstart stops
+        // the browser from generating synthetic mouse events, scrolling, or
+        // double-tap zooming. touch-action: none on the canvas in CSS does
+        // the same at the gesture level.
+        //
+        // A touch starts in "pending" mode: we don't act until either the
+        // finger moves to a different cell (→ drag-paint x's) or it lifts
+        // without moving (→ single-tap cycle on the start cell).
+        let touchStart = null;
+        let touchDragging = false;
+        let touchDragValue = null;
+
+        const applyTouchPaint = (cell) => {
             const [x, y] = cell;
-            const m = marks[y][x];
-            if (m === null) marks[y][x] = "x";
-            else if (m === "x" || m === "ax") {
-                marks[y][x] = null;
-                addQueen(x, y);
-            } else removeQueen(x, y);
-            draw();
-            checkWin();
-            return;
-        }
-        // Ctrl/Cmd + left mousedown is treated identically to right mousedown
-        // (trackpad-friendly): starts an x-paint drag based on the start cell.
-        const isXAction =
-            e.button === 2 || (e.button === 0 && (e.ctrlKey || e.metaKey));
-        if (isXAction) {
+            if (marks[y][x] === "queen") return;
+            if (marks[y][x] !== touchDragValue) {
+                marks[y][x] = touchDragValue;
+                draw();
+            }
+        };
+
+        canvas.addEventListener(
+            "touchstart",
+            (e) => {
+                if (isPaused) return;
+                e.preventDefault();
+                if (e.touches.length !== 1) return;
+                const t = e.touches[0];
+                const cell = cellAt(t.clientX, t.clientY);
+                if (!cell) return;
+                touchStart = cell;
+                touchDragging = false;
+                const m = marks[cell[1]][cell[0]];
+                touchDragValue = m === "x" || m === "ax" ? null : "x";
+            },
+            { passive: false },
+        );
+
+        canvas.addEventListener(
+            "touchmove",
+            (e) => {
+                if (isPaused || !touchStart) return;
+                e.preventDefault();
+                const t = e.touches[0];
+                const cell = cellAt(t.clientX, t.clientY);
+                if (!cell) return;
+                if (
+                    cell[0] !== touchStart[0] ||
+                    cell[1] !== touchStart[1] ||
+                    touchDragging
+                ) {
+                    if (!touchDragging) {
+                        touchDragging = true;
+                        startTimer();
+                        applyTouchPaint(touchStart);
+                    }
+                    applyTouchPaint(cell);
+                }
+            },
+            { passive: false },
+        );
+
+        canvas.addEventListener(
+            "touchend",
+            (e) => {
+                if (isPaused) return;
+                e.preventDefault();
+                if (touchStart && !touchDragging) {
+                    // Single tap: cycle empty → x → queen → empty.
+                    startTimer();
+                    const [x, y] = touchStart;
+                    const m = marks[y][x];
+                    if (m === null) marks[y][x] = "x";
+                    else if (m === "x" || m === "ax") {
+                        marks[y][x] = null;
+                        addQueen(x, y);
+                    } else removeQueen(x, y);
+                    draw();
+                    checkWin();
+                }
+                touchStart = null;
+                touchDragging = false;
+            },
+            { passive: false },
+        );
+        canvas.addEventListener("touchcancel", () => {
+            touchStart = null;
+            touchDragging = false;
+        });
+    } else {
+        canvas.addEventListener("mousedown", (e) => {
+            if (isPaused) return;
+            // Ctrl/Cmd + left mousedown is treated identically to right
+            // mousedown (trackpad-friendly): starts an x-paint drag based on
+            // the start cell.
+            const isXAction =
+                e.button === 2 || (e.button === 0 && (e.ctrlKey || e.metaKey));
+            if (isXAction) {
+                const cell = eventCell(e);
+                if (!cell) return;
+                startTimer();
+                rightDragging = true;
+                const m = marks[cell[1]][cell[0]];
+                rightDragValue = m === "x" || m === "ax" ? null : "x";
+                applyRightDrag(cell);
+                return;
+            }
+            if (e.button === 0) handleLeftClick(e);
+        });
+
+        canvas.addEventListener("mousemove", (e) => {
+            if (!rightDragging || isPaused) return;
             const cell = eventCell(e);
             if (!cell) return;
-            startTimer();
-            rightDragging = true;
-            const m = marks[cell[1]][cell[0]];
-            rightDragValue = m === "x" || m === "ax" ? null : "x";
             applyRightDrag(cell);
-            return;
-        }
-        if (e.button === 0) handleLeftClick(e);
-    });
+        });
 
-    canvas.addEventListener("mousemove", (e) => {
-        if (!rightDragging || isPaused) return;
-        const cell = eventCell(e);
-        if (!cell) return;
-        applyRightDrag(cell);
-    });
-
-    const endRightDrag = () => {
-        rightDragging = false;
-    };
-    canvas.addEventListener("mouseup", endRightDrag);
-    canvas.addEventListener("mouseleave", endRightDrag);
+        const endRightDrag = () => {
+            rightDragging = false;
+        };
+        canvas.addEventListener("mouseup", endRightDrag);
+        canvas.addEventListener("mouseleave", endRightDrag);
+    }
 
     document.getElementById("restart").addEventListener("click", reset);
     document.getElementById("newGame").addEventListener("click", reset);
@@ -333,11 +411,10 @@ const reset = async () => {
     marks = makeGrid(GRID_SIZE, null);
     const { grid: newGrid, stats } = generateUniqueBoard(GRID_SIZE);
     grid = newGrid;
-    const msg =
-        `${stats.attempts} attempts (${stats.reshapes} reshapes) ` +
-        `in ${stats.elapsedMs.toFixed(0)}ms`;
-    if (stats.found) console.log(`Unique board in ${msg}.`);
-    else console.warn(`Gave up after ${msg} — board may be ambiguous.`);
+    console.log(
+        `Unique board in ${stats.attempts} attempts ` +
+            `(${stats.reshapes} reshapes), ${stats.elapsedMs.toFixed(0)}ms.`,
+    );
 
     document.getElementById("loadingOverlay")?.classList.remove("show");
     if (ctx) draw();
