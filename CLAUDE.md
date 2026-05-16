@@ -12,14 +12,30 @@ produce boards that have **exactly one valid solution**. That's what most of
 ## Files
 
 - `index.html` — markup + CSS. Holds the canvas, the control bar (timer, size
-  selector, pause, new game), and three overlays: win, pause, loading. Modules
-  defer until DOM-ready, so top-level JS can safely query elements.
+  selector, pause, new game, recent), four overlays (win, pause, loading,
+  recent-boards). Modules defer until DOM-ready, so top-level JS can safely
+  query elements.
 - `index.js` — game UI: input handling, drawing, win detection, timer, board
-  resize, pause. Imports `generateUniqueBoard` from `generation.js`.
-- `generation.js` — the board generator. Exports a single function
-  `generateUniqueBoard(N)` that returns `{ grid, stats }`.
+  resize, pause, share/replay/recent. Reads `#b=` from `location.hash` on
+  load to display shared boards.
+- `generation.js` — the board generator. Exports `generateUniqueBoard(N, opts)`
+  returning `{ grid, stats }`. `opts.seed` (uint32) is for deterministic
+  tests; production callers pass nothing and get a random board.
+- `seed.js` — `mulberry32` PRNG (used internally by the generator),
+  `randomSeed` (crypto-backed uint32), and `readBoardHash`/`writeBoardHash`
+  for the `#b=` URL param.
+- `boardCodec.js` — encode/decode region grid ↔ URL-safe base64 (4 bits per
+  cell), `boardKey` (FNV-1a 64 over canonical region IDs), and
+  `regionIdsToColorGrid` which derives N colors deterministically from the
+  board's own boardKey so freshly-generated and loaded-from-URL boards
+  render identically.
+- `scoreStore.js` — async API for personal completion-time persistence,
+  backed by localStorage. Designed to be swappable for a remote backend
+  later via `setBackend`.
 - `test_generation.mjs` — Node benchmark harness for `generation.js`. ESM
   (`.mjs`) because there's no `package.json` declaring `"type": "module"`.
+  Runs a determinism regression (same seed + N → identical region grids)
+  before the perf sweep.
 
 ## Game logic (index.js)
 
@@ -86,13 +102,83 @@ Generation can block the main thread for seconds at N≥12. Live with it
 unless you want to move generation to a Web Worker (would require restructuring
 the typed-array sharing in `generation.js`).
 
+## Sharing & persistence
+
+### Share URL format
+
+Shareable boards live in the URL hash as `#b=<urlsafe-base64>`. The payload
+is byte 0 = N, then 4 bits per cell of *canonical* region IDs (renumbered
+in row-major first-encounter order so identical shapes always encode to the
+same bytes). Worst case at N=15 is ~152 base64 chars. There is **no** seed
+URL form, deliberately:
+
+- A seed URL would force the recipient to re-run the generator (seconds at
+  N≥12) instead of loading instantly.
+- A seed URL would also be brittle to any future generator change — same
+  seed could produce a different board. The `#b=` form is immortal.
+
+The PRNG infrastructure in `seed.js` is still useful for the determinism
+test in `test_generation.mjs`, but seeds are not user-visible.
+
+### Color determinism
+
+Colors are derived from the board's own `boardKey` (mulberry32 seeded by
+the first 8 hex chars of the FNV-1a hash of canonical region IDs). This
+means freshly-generated and loaded-from-URL boards always render with
+identical colors — `generation.js` calls `regionIdsToColorGrid` for its
+final step, and `boardCodec.decodeBoard` callers do the same.
+
+Implication: if you change the color-derivation function, every previously
+shared board changes color. The region shapes are still correct, but
+visual identity isn't preserved across that change.
+
+### Completion-time storage
+
+`scoreStore.js` persists times under localStorage key `queens.scores.v1`.
+Schema:
+
+```json
+{
+  "v": 1,
+  "boards": {
+    "<boardKey>": {
+      "size": 10,
+      "encoded": "<urlsafe-base64>",
+      "times": [{ "ts": 1731600000000, "ms": 45230 }]
+    }
+  },
+  "history": ["<boardKey>", "..."]
+}
+```
+
+The `encoded` field stores the same string used in `#b=` URLs, so the
+Recent menu can replay any past board. `history` is MRU-capped at 50.
+
+The store exposes four async methods: `recordCompletion`,
+`getTimesForBoard`, `getRecentBoards`, `addToHistory`. They route through
+a swappable `backend` (currently a thin localStorage adapter). To swap in
+a remote backend later, write a `{ read, write }` adapter and call
+`setBackend(adapter)` — no UI changes required.
+
+There's no server-side store today. We discussed the options (Cloudflare
+Worker writing to a GitHub JSON file, free-tier Supabase/Firebase, GitHub
+OAuth + Issues) and concluded all of them have equivalent abuse surface
+once the endpoint is public, mitigated by server-side rate limiting and
+validation. None has been implemented; `scoreStore` is structured so it
+can be when the time comes.
+
 ## Generator (generation.js)
 
-`generateUniqueBoard(N)` runs until it finds a uniquely-solvable board.
-There is no time budget — for large N this can take a while; the caller is
-expected to show a loading indicator. Returns `{ grid, stats }`. `grid` is
-a 2D array of color strings (random hex per region). `stats` reports
-`{ attempts, reshapes, elapsedMs }`.
+`generateUniqueBoard(N, opts = {})` runs until it finds a uniquely-solvable
+board. There is no time budget — for large N this can take a while; the
+caller is expected to show a loading indicator. Returns `{ grid, stats }`.
+`grid` is a 2D array of color strings (one per region, deterministic from
+the board's boardKey — see "Color determinism" above). `stats` reports
+`{ attempts, reshapes, elapsedMs, seed }`.
+
+`opts.seed` (uint32) seeds the internal mulberry32 PRNG, making the entire
+generation deterministic. Used by the test harness; the UI passes no opts
+and gets a fresh random seed each call.
 
 ### High-level algorithm
 
