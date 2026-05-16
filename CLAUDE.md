@@ -128,8 +128,14 @@ The cornerstone of the generator at large N. `reshapeOnce`:
    - For each candidate region: tentatively recolor, check that both the
      donor and recipient regions remain 4-connected (`regionConnected`).
    - First viable move is taken; we return `true`.
-3. If no cell admits a viable move, return `false` (the search loop then
-   breaks out of reshape and moves to the next random attempt).
+3. If single-cell donation is exhausted, fall back to **pair-swap**: for
+   each high-score cell A and each adjacent cell B in a different region,
+   swap their region IDs. The donor region keeps the same size (B replaces
+   A), so connectivity is preserved more often than under a one-way
+   donation. Skip pairs where either side is an intended queen cell.
+4. If no single-cell move and no pair-swap is viable, return `false` (the
+   search loop then breaks out of reshape and moves to the next random
+   attempt).
 
 **Why reshape works (correctness):** the intended solution's queens are at
 `(queenCols[r], r)` for each row `r`. `reshapeOnce` never touches those
@@ -150,6 +156,10 @@ These are not premature optimization — they matter at N=12 and above:
   overall. Random-pop (swap-with-last, pop) is O(1).
 - **Bitmask used-sets** in `fastCount`. `Set.has/add/delete` per recursion
   step was the hot spot at N=12.
+- **Bit-iteration over candidate columns** in `fastCount` and
+  `collectAltScores`. Build the legal-column mask (`~usedC & ~adjMask`)
+  and iterate set bits via `cands & -cands` + `Math.clz32`. ~2× speedup
+  vs the per-column branch.
 
 After all that, on a 2024 laptop we get ~50,000 attempts/sec at N=10 and
 roughly an order of magnitude fewer per N added.
@@ -193,6 +203,20 @@ hurt success rate. Removed.
 success from 12/30 to 3/30. Diversity from many different random starting
 configurations beats depth on any one configuration.
 
+**Warm restart with partial preservation** (v4a — keep queens, re-flood-fill
+regions up to 5 times before rerolling queens). No measurable improvement at
+N=12. Same depth-vs-diversity finding as above, now confirmed at the queen-
+layout level too.
+
+**Adaptive alt cap (32 instead of 8 at N≥13)** (v4b). Larger cap costs more
+per call without changing the greedy first-viable move ordering enough to
+matter. No measurable improvement.
+
+**Reject queen layouts with too many trivial swap pairs** (v4d). At
+threshold N, ~100% rejection rate — almost every random non-attacking layout
+admits hundreds of swap-feasible pairs. Approach is unsalvageable as a
+prefilter.
+
 ### Knobs that exist
 
 - `PER_ATTEMPT_RESHAPES = 30` — reshapes before abandoning a random board.
@@ -203,24 +227,21 @@ solver becomes unreasonably slow well before that.
 
 ## Performance baseline
 
-From `test_generation.mjs` on a 2024 laptop, 30 trials each:
+After the v4c pair-recolor + bitmask merges (60s per-trial budget):
 
-| N  | success | mean time |
-|----|---------|-----------|
-| 8  | 30/30   | ~3 ms     |
-| 10 | 30/30   | ~150 ms   |
-| 11 | 28/30   | ~700 ms   |
-| 12 | 12/30   | ~2.1 s    |
-| 14 | 0/20    | full 3 s  |
+| N  | success | mean time   |
+|----|---------|-------------|
+| 10 | 5/5     | ~25 ms      |
+| 12 | 5/5     | ~1.2 s      |
+| 14 | 0/5     | (timeouts)  |
+| 15 | 0/5     | (timeouts)  |
 
-The drop-off above N=11 is the main remaining issue. Promising directions
-(none tried yet):
-- Smarter restart when stuck (perturb the current best instead of fully
-  rerolling).
-- Parallel attempts via a Web Worker pool.
-- Move to a constraint-propagation generator (see WFC discussion in chat
-  history — unlikely to help with uniqueness specifically but might give
-  different region shapes).
+The N≥14 cliff is the remaining issue. Variants tried in the v4 round
+(warm restart, adaptive cap, swap-pair queen rejection, worker pool) and
+their results are documented in [EXPERIMENTS.md](EXPERIMENTS.md). The
+worker pool variant lives in `generation.worker-pool.js` + `worker_runner.mjs`
+and gives a ~7× throughput multiplier in Node, but on its own does not move
+the N=15 wall — only ~2/5 success at N=14.
 
 ## Test harness
 
@@ -230,6 +251,9 @@ node test_generation.mjs 11           # one size, default 20 trials
 node test_generation.mjs 11 50        # one size, 50 trials
 node test_generation.mjs --verify     # also re-solve each returned board and
                                       # check it has exactly one solution
+node test_generation.mjs 15 5 --budget=60000              # per-trial budget
+node test_generation.mjs 14 5 --budget=60000 \
+    --gen=./generation.worker-pool.js                     # variant generator
 ```
 
 Reports per size: success rate, attempts/reshapes/time mean/median/p95/max,

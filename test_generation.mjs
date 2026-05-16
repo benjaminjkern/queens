@@ -1,17 +1,24 @@
 // Benchmark + sanity-test harness for generation.js.
 //
 // Usage:
-//   node test_generation.mjs                # full sweep
-//   node test_generation.mjs 11             # one size, default trials
-//   node test_generation.mjs 11 50          # one size, 50 trials
-//   node test_generation.mjs --verify       # full sweep + per-board verify
+//   node test_generation.mjs                          # full sweep
+//   node test_generation.mjs 11                       # one size, default trials
+//   node test_generation.mjs 11 50                    # one size, 50 trials
+//   node test_generation.mjs --verify                 # also verify each board
+//   node test_generation.mjs 15 20 --budget=60000     # 60s per-trial budget
+//   node test_generation.mjs --gen=./generation.X.js  # swap in a variant
 //
-// Reports for each N: success rate, attempts, reshapes, time (mean/median/p95).
-
-import { generateUniqueBoard } from "./generation.js";
+// Reports per N: success/timeout counts, attempts, reshapes, time stats.
 
 const args = process.argv.slice(2);
 const verify = args.includes("--verify");
+const budgetArg = args.find((a) => a.startsWith("--budget="));
+const genArg = args.find((a) => a.startsWith("--gen="));
+const budgetMs = budgetArg ? Number(budgetArg.split("=")[1]) : Infinity;
+const genPath = genArg ? genArg.split("=")[1] : "./generation.js";
+
+const { generateUniqueBoard } = await import(genPath);
+
 const numericArgs = args.filter((a) => !a.startsWith("--")).map(Number);
 const sizes = numericArgs.length > 0 ? [numericArgs[0]] : [8, 10, 11, 12, 14, 16, 18];
 const trials = numericArgs.length > 1 ? numericArgs[1] : 20;
@@ -19,7 +26,6 @@ const trials = numericArgs.length > 1 ? numericArgs[1] : 20;
 // Simple solution counter to verify uniqueness of returned grids.
 const countSolutions = (grid, limit) => {
     const N = grid.length;
-    // Map color strings → region IDs.
     const colorMap = new Map();
     const regionGrid = new Int8Array(N * N);
     for (let y = 0; y < N; y++) {
@@ -82,27 +88,31 @@ const fmt = (n, digits = 0) =>
           ? n.toFixed(digits).padStart(8)
           : String(n).padStart(8);
 
-const runSize = (N, trials) => {
-    console.log(`\n=== N=${N}, ${trials} trials ===`);
+const runSize = async (N, trials) => {
+    console.log(`\n=== N=${N}, ${trials} trials${Number.isFinite(budgetMs) ? `, budget=${budgetMs}ms` : ""} ===`);
     const attempts = [];
     const reshapes = [];
     const times = [];
+    let timeouts = 0;
     let verifyFails = 0;
 
     for (let i = 0; i < trials; i++) {
-        const t0 = performance.now();
-        const { grid, stats: s } = generateUniqueBoard(N);
-        const elapsed = performance.now() - t0;
+        const { grid, stats: s } = await generateUniqueBoard(N, { budgetMs });
+        if (s.timedOut || grid === null) {
+            timeouts++;
+            process.stdout.write("T");
+            continue;
+        }
         attempts.push(s.attempts);
         reshapes.push(s.reshapes);
-        times.push(elapsed);
+        times.push(s.elapsedMs);
 
         if (verify) {
             const { count, regionCount } = countSolutions(grid, 3);
             if (count !== 1 || regionCount !== N) {
                 verifyFails++;
                 console.log(
-                    `  trial ${i}: verify says solutions=${count} regions=${regionCount}`,
+                    `\n  trial ${i}: verify says solutions=${count} regions=${regionCount}`,
                 );
             }
         }
@@ -110,11 +120,12 @@ const runSize = (N, trials) => {
     }
     process.stdout.write("\n");
 
+    console.log(`  success: ${times.length}/${trials}  timeouts: ${timeouts}`);
+    if (verify) console.log(`  verify-fail: ${verifyFails}`);
+    if (times.length === 0) return;
     const aS = stats(attempts);
     const rS = stats(reshapes);
     const tS = stats(times);
-
-    if (verify) console.log(`  verify-fail: ${verifyFails}`);
     console.log(
         `  attempts:  mean=${fmt(aS.mean, 1)} median=${fmt(aS.median)}  p95=${fmt(aS.p95)}  max=${fmt(aS.max)}`,
     );
@@ -126,4 +137,5 @@ const runSize = (N, trials) => {
     );
 };
 
-for (const N of sizes) runSize(N, trials);
+console.log(`generator: ${genPath}`);
+for (const N of sizes) await runSize(N, trials);

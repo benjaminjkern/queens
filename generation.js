@@ -21,7 +21,8 @@
 // region invalidates the alt (its region count breaks) while leaving the
 // intended solution untouched.
 
-export const generateUniqueBoard = (N) => {
+export const generateUniqueBoard = (N, opts = {}) => {
+    const budgetMs = opts.budgetMs ?? Infinity;
     const NN = N * N;
     const regionGrid = new Int8Array(NN); // region id 0..N-1, or -1 for empty
     const queenCols = new Int8Array(N); // queenCols[row] = column of queen
@@ -138,6 +139,7 @@ export const generateUniqueBoard = (N) => {
 
     // Count solutions on regionGrid up to `limit`. Treats unfilled cells (-1)
     // as un-placeable so it works on partial boards too.
+    const ALL_COLS = (1 << N) - 1;
     const fastCount = (limit) => {
         let count = 0;
         let usedC = 0;
@@ -149,10 +151,12 @@ export const generateUniqueBoard = (N) => {
                 return;
             }
             const base = row * N;
-            for (let x = 0; x < N; x++) {
-                const cbit = 1 << x;
-                if (usedC & cbit) continue;
-                if (prev !== -1 && x - prev <= 1 && prev - x <= 1) continue;
+            const adj = prev === -1 ? 0 : prev === 0 ? 0b11 : (0b111 << (prev - 1)) & ALL_COLS;
+            let cands = ALL_COLS & ~usedC & ~adj;
+            while (cands !== 0) {
+                const cbit = cands & -cands;
+                cands ^= cbit;
+                const x = 31 - Math.clz32(cbit);
                 const r = regionGrid[base + x];
                 if (r < 0) continue;
                 const rbit = 1 << r;
@@ -197,11 +201,14 @@ export const generateUniqueBoard = (N) => {
                 return;
             }
             const base = row * N;
-            for (let x = 0; x < N; x++) {
-                const cbit = 1 << x;
-                if (usedC & cbit) continue;
-                if (prev !== -1 && x - prev <= 1 && prev - x <= 1) continue;
+            const adj = prev === -1 ? 0 : prev === 0 ? 0b11 : (0b111 << (prev - 1)) & ALL_COLS;
+            let cands = ALL_COLS & ~usedC & ~adj;
+            while (cands !== 0) {
+                const cbit = cands & -cands;
+                cands ^= cbit;
+                const x = 31 - Math.clz32(cbit);
                 const r = regionGrid[base + x];
+                if (r < 0) continue;
                 const rbit = 1 << r;
                 if (usedR & rbit) continue;
                 altPlaced[row] = x;
@@ -309,6 +316,37 @@ export const generateUniqueBoard = (N) => {
                 regionGrid[idx] = cur;
             }
         }
+
+        // Pair-recolor fallback. For each high-score cell A, try swapping
+        // regions with an adjacent cell B in a different region. Both regions
+        // keep the same size; A leaves its old region (which is the goal —
+        // every alt that used A is broken). Connectivity check on both
+        // regions still required. Skip if either cell is an intended queen.
+        for (const idx of cells) {
+            const yA = (idx / N) | 0;
+            const xA = idx - yA * N;
+            const rA = regionGrid[idx];
+            if (rA === yA && queenCols[rA] === xA) continue;
+
+            const neighbors = [];
+            if (yA > 0) neighbors.push(idx - N);
+            if (yA < N - 1) neighbors.push(idx + N);
+            if (xA > 0) neighbors.push(idx - 1);
+            if (xA < N - 1) neighbors.push(idx + 1);
+
+            for (const bIdx of neighbors) {
+                const rB = regionGrid[bIdx];
+                if (rB === rA) continue;
+                const yB = (bIdx / N) | 0;
+                const xB = bIdx - yB * N;
+                if (rB === yB && queenCols[rB] === xB) continue;
+                regionGrid[idx] = rB;
+                regionGrid[bIdx] = rA;
+                if (regionConnected(rA) && regionConnected(rB)) return true;
+                regionGrid[idx] = rA;
+                regionGrid[bIdx] = rB;
+            }
+        }
         return false;
     };
 
@@ -334,9 +372,26 @@ export const generateUniqueBoard = (N) => {
         return false;
     };
 
+    let timedOut = false;
     while (true) {
+        if (performance.now() - start > budgetMs) {
+            timedOut = true;
+            break;
+        }
         attempts++;
         if (tryAttempt()) break;
+    }
+
+    if (timedOut) {
+        return {
+            grid: null,
+            stats: {
+                attempts,
+                reshapes: totalReshapes,
+                elapsedMs: performance.now() - start,
+                timedOut: true,
+            },
+        };
     }
 
     // Project regionGrid → 2D color grid with one random hex color per region.
