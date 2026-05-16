@@ -25,6 +25,8 @@
       gap: 20px;
       color: white;
       font-size: 1.2em;
+      flex-wrap: wrap;
+      justify-content: center;
     }
     #timer {
       font-size: 1.5em;
@@ -102,13 +104,82 @@
       justify-content: center;
       background: rgba(0,0,0,0.6);
       color: white;
-      gap: 16px;
+      gap: 12px;
+      padding: 20px;
+      box-sizing: border-box;
+      text-align: center;
     }
     #win.show { display: flex; }
     #win h1 { margin: 0; font-size: 2em; }
-    #win button {
-      font-size: 1.2em;
-      padding: 8px 20px;
+    #win .win-buttons {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    #win button, #win a.linklike {
+      font-size: 1em;
+      padding: 8px 16px;
+      cursor: pointer;
+      border: 1px solid white;
+      background: transparent;
+      color: white;
+      border-radius: 4px;
+      text-decoration: none;
+      display: inline-block;
+    }
+    #win .pb-badge {
+      background: gold;
+      color: #222;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-weight: bold;
+      display: none;
+    }
+    #win .pb-badge.show { display: inline-block; }
+    #win .final-time { font-size: 1.4em; font-variant-numeric: tabular-nums; }
+    #recentOverlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0,0,0,0.85);
+      color: white;
+      z-index: 20;
+      padding: 20px;
+      box-sizing: border-box;
+    }
+    #recentOverlay.show { display: flex; }
+    #recentOverlay h1 { margin: 0 0 16px; font-size: 1.5em; }
+    #recentList {
+      width: 100%;
+      max-width: 480px;
+      max-height: 60vh;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .recent-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      background: #333;
+      border-radius: 6px;
+      cursor: pointer;
+      gap: 12px;
+    }
+    .recent-item:hover { background: #444; }
+    .recent-item .meta { color: #bbb; font-size: 0.9em; }
+    .recent-item .best { font-variant-numeric: tabular-nums; font-weight: bold; }
+    #recentOverlay .empty { color: #888; font-style: italic; }
+    #recentOverlay .close {
+      margin-top: 16px;
+      font-size: 1em;
+      padding: 6px 16px;
       cursor: pointer;
     }
   </style>
@@ -120,6 +191,7 @@
     <label>Size: <select id="size"></select></label>
     <button id="pause">Pause</button>
     <button id="newGame">New Game</button>
+    <button id="recent">Recent</button>
   </div>
   <div id="wrap">
     <canvas id="canvas"></canvas>
@@ -133,8 +205,19 @@
     </div>
     <div id="win">
       <h1>🎉 You won! 🎉</h1>
-      <button id="restart">Play again</button>
+      <div class="final-time" id="finalTime"></div>
+      <div class="pb-badge" id="pbBadge">⭐ New personal best!</div>
+      <div class="win-buttons">
+        <button id="restart">New game</button>
+        <button id="replay">Replay this board</button>
+        <button id="share">Copy share link</button>
+      </div>
     </div>
+  </div>
+  <div id="recentOverlay">
+    <h1>Recent boards</h1>
+    <div id="recentList"></div>
+    <button class="close" id="recentClose">Close</button>
   </div>
 </body>
 

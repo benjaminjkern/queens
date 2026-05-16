@@ -126,4 +126,43 @@ const runSize = (N, trials) => {
     );
 };
 
+// Determinism: same seed + N must produce byte-identical region grids.
+// Run this first so it surfaces regressions before the slow sweep.
+const checkDeterminism = () => {
+    const cases = [
+        { N: 8, seed: 1 },
+        { N: 10, seed: 12345 },
+        { N: 11, seed: 0xdeadbeef },
+    ];
+    for (const { N, seed } of cases) {
+        const a = generateUniqueBoard(N, { seed });
+        const b = generateUniqueBoard(N, { seed });
+        // Compare canonical region IDs (color hex strings depend on rng too,
+        // so if those match, every internal step matched).
+        const canonical = (grid) => {
+            const map = new Map();
+            const out = [];
+            for (const row of grid) for (const c of row) {
+                if (!map.has(c)) map.set(c, map.size);
+                out.push(map.get(c));
+            }
+            return out.join(",");
+        };
+        const ca = canonical(a.grid);
+        const cb = canonical(b.grid);
+        if (ca !== cb) {
+            console.error(`DETERMINISM FAIL N=${N} seed=${seed}`);
+            process.exit(1);
+        }
+        if (a.stats.seed !== seed) {
+            console.error(
+                `seed not echoed: N=${N} expected ${seed} got ${a.stats.seed}`,
+            );
+            process.exit(1);
+        }
+    }
+    console.log(`determinism: ok (${cases.length} cases)`);
+};
+checkDeterminism();
+
 for (const N of sizes) runSize(N, trials);

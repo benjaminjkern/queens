@@ -1,4 +1,16 @@
 import { generateUniqueBoard } from "./generation.js";
+import { readBoardHash, writeBoardHash } from "./seed.js";
+import {
+    boardKey as computeBoardKey,
+    decodeBoard,
+    encodeBoard,
+    regionIdsToColorGrid,
+} from "./boardCodec.js";
+import {
+    addToHistory,
+    getRecentBoards,
+    recordCompletion,
+} from "./scoreStore.js";
 
 let canvas, ctx;
 
@@ -184,9 +196,37 @@ const checkWin = () => {
             if (Math.abs(ax - bx) <= 1 && Math.abs(ay - by) <= 1) return false;
         }
     }
+    const elapsedMs =
+        pausedElapsed !== null
+            ? pausedElapsed
+            : timerStart !== null
+              ? performance.now() - timerStart
+              : 0;
     stopTimer();
-    document.getElementById("win").classList.add("show");
+    showWinOverlay(elapsedMs);
     return true;
+};
+
+const formatMs = (ms) => {
+    const s = Math.floor(ms / 1000);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+const showWinOverlay = async (elapsedMs) => {
+    const finalEl = document.getElementById("finalTime");
+    const pbEl = document.getElementById("pbBadge");
+    finalEl.textContent = `Time: ${formatMs(elapsedMs)}`;
+    pbEl.classList.remove("show");
+    document.getElementById("win").classList.add("show");
+
+    if (!currentBoardKey) return;
+    const { personalBest } = await recordCompletion({
+        boardKey: currentBoardKey,
+        size: GRID_SIZE,
+        encoded: currentEncodedBoard,
+        ms: Math.round(elapsedMs),
+    });
+    if (personalBest) pbEl.classList.add("show");
 };
 
 // Right-click drag paints x's on every cell touched, OR clears x's if the drag
@@ -349,15 +389,127 @@ window.onload = () => {
         canvas.addEventListener("mouseleave", endRightDrag);
     }
 
-    document.getElementById("restart").addEventListener("click", reset);
-    document.getElementById("newGame").addEventListener("click", reset);
+    document.getElementById("restart").addEventListener("click", () => {
+        writeBoardHash("");
+        reset({ size: GRID_SIZE });
+    });
+    document.getElementById("newGame").addEventListener("click", () => {
+        writeBoardHash("");
+        reset({ size: GRID_SIZE });
+    });
     document.getElementById("pause").addEventListener("click", () => {
         if (isPaused) resumeGame();
         else pauseGame();
     });
     document.getElementById("resume").addEventListener("click", resumeGame);
 
-    reset();
+    document.getElementById("replay").addEventListener("click", () => {
+        // Re-render the exact board we just played — no regen needed.
+        const { regionIds, N } = decodeBoard(currentEncodedBoard);
+        reset({ regionIds, N });
+    });
+    document.getElementById("share").addEventListener("click", () => {
+        if (!currentEncodedBoard) return;
+        copyToClipboard(buildShareUrl());
+    });
+
+    document.getElementById("recent").addEventListener("click", openRecent);
+    document.getElementById("recentClose").addEventListener("click", () => {
+        document.getElementById("recentOverlay").classList.remove("show");
+    });
+
+    loadFromHash();
+};
+
+const buildShareUrl = () =>
+    `${location.origin}${location.pathname}${location.search}#b=${currentEncodedBoard}`;
+
+const copyToClipboard = async (text) => {
+    try {
+        await navigator.clipboard.writeText(text);
+        flashButton("Copied!");
+    } catch {
+        // Fallback prompt for environments without clipboard permission.
+        prompt("Copy this link:", text);
+    }
+};
+
+let flashTimer = null;
+const flashButton = (msg) => {
+    // Temporarily replace the share button's text so the user gets feedback.
+    const btn = document.getElementById("share");
+    const prev = btn.textContent;
+    btn.textContent = msg;
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+        btn.textContent = prev;
+    }, 1200);
+};
+
+const openRecent = async () => {
+    const list = document.getElementById("recentList");
+    list.innerHTML = "";
+    const items = await getRecentBoards();
+    if (items.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "No recent boards yet — play one!";
+        list.appendChild(empty);
+    } else {
+        for (const item of items) {
+            const row = document.createElement("div");
+            row.className = "recent-item";
+            const left = document.createElement("div");
+            const size = document.createElement("div");
+            size.textContent = `${item.size}×${item.size}`;
+            const meta = document.createElement("div");
+            meta.className = "meta";
+            const last = item.lastPlayed
+                ? new Date(item.lastPlayed).toLocaleDateString()
+                : "never finished";
+            meta.textContent = `${item.playCount}× • last ${last}`;
+            left.appendChild(size);
+            left.appendChild(meta);
+            const best = document.createElement("div");
+            best.className = "best";
+            best.textContent = item.bestMs != null ? formatMs(item.bestMs) : "—";
+            row.appendChild(left);
+            row.appendChild(best);
+            row.addEventListener("click", () => {
+                document
+                    .getElementById("recentOverlay")
+                    .classList.remove("show");
+                loadFromRecent(item);
+            });
+            list.appendChild(row);
+        }
+    }
+    document.getElementById("recentOverlay").classList.add("show");
+};
+
+const loadFromRecent = (item) => {
+    if (!item.encoded) return;
+    try {
+        const { regionIds, N } = decodeBoard(item.encoded);
+        writeBoardHash(item.encoded);
+        reset({ regionIds, N });
+    } catch (e) {
+        console.warn("Failed to decode recent board:", e);
+    }
+};
+
+const loadFromHash = () => {
+    const board = readBoardHash();
+    if (board) {
+        try {
+            const { regionIds, N } = decodeBoard(board);
+            reset({ regionIds, N });
+            return;
+        } catch (e) {
+            console.warn("Failed to decode board from URL:", e);
+        }
+    }
+    reset({ size: GRID_SIZE });
 };
 
 // Repaint every cell: the region color first, then the player's mark on top.
@@ -398,23 +550,62 @@ const yieldToBrowser = () =>
         requestAnimationFrame(() => requestAnimationFrame(resolve)),
     );
 
-// Generate a fresh board at the current GRID_SIZE and reset marks/timer.
-// Shows a loading spinner while the (synchronous) generator runs, then
-// redraws the board.
-const reset = async () => {
+// Current board's identifying info, populated by reset().
+let currentBoardKey = null;
+let currentEncodedBoard = null;
+
+// Generate or load a board and reset marks/timer.
+//
+// Options:
+//   { regionIds, N }  → load the exact board (instant, no regen).
+//   { size }          → freshly generate at this size.
+//   {}                → freshly generate at current GRID_SIZE.
+const reset = async (opts = {}) => {
     document.getElementById("win")?.classList.remove("show");
     document.getElementById("loadingOverlay")?.classList.add("show");
     resumePauseUI(false);
     resetTimer();
     await yieldToBrowser();
 
+    let newGrid;
+    let sizeForBoard;
+
+    if (opts.regionIds && opts.N) {
+        sizeForBoard = opts.N;
+        newGrid = regionIdsToColorGrid(opts.regionIds, sizeForBoard);
+    } else {
+        sizeForBoard = opts.size ?? GRID_SIZE;
+        const { grid: g, stats } = generateUniqueBoard(sizeForBoard);
+        newGrid = g;
+        console.log(
+            `Unique board in ${stats.attempts} attempts ` +
+                `(${stats.reshapes} reshapes), ${stats.elapsedMs.toFixed(0)}ms.`,
+        );
+    }
+
+    // Resize canvas if the loaded board's N differs from GRID_SIZE.
+    if (sizeForBoard !== GRID_SIZE) {
+        GRID_SIZE = sizeForBoard;
+        const sizeSelect = document.getElementById("size");
+        if (sizeSelect) sizeSelect.value = String(GRID_SIZE);
+        if (canvas) {
+            canvas.width = GRID_SIZE * SQUARE_SIZE;
+            canvas.height = GRID_SIZE * SQUARE_SIZE;
+        }
+    }
+
     marks = makeGrid(GRID_SIZE, null);
-    const { grid: newGrid, stats } = generateUniqueBoard(GRID_SIZE);
     grid = newGrid;
-    console.log(
-        `Unique board in ${stats.attempts} attempts ` +
-            `(${stats.reshapes} reshapes), ${stats.elapsedMs.toFixed(0)}ms.`,
-    );
+
+    currentEncodedBoard = encodeBoard(grid);
+    currentBoardKey = computeBoardKey(grid);
+
+    writeBoardHash(currentEncodedBoard);
+    await addToHistory({
+        boardKey: currentBoardKey,
+        size: GRID_SIZE,
+        encoded: currentEncodedBoard,
+    });
 
     document.getElementById("loadingOverlay")?.classList.remove("show");
     if (ctx) draw();
@@ -427,7 +618,8 @@ const setBoardSize = async (n) => {
         canvas.width = GRID_SIZE * SQUARE_SIZE;
         canvas.height = GRID_SIZE * SQUARE_SIZE;
     }
-    await reset();
+    writeBoardHash("");
+    await reset({ size: GRID_SIZE });
 };
 
 // Pause overlay covers the canvas (so the board isn't visible) and pauses

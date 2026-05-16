@@ -21,7 +21,22 @@
 // region invalidates the alt (its region count breaks) while leaving the
 // intended solution untouched.
 
-export const generateUniqueBoard = (N) => {
+import { mulberry32, randomSeed } from "./seed.js";
+import { regionIdsToColorGrid } from "./boardCodec.js";
+
+// `opts.seed` (uint32) seeds an internal mulberry32 PRNG; the same seed + N
+// produces the same regionGrid and the same colors. If omitted, a random
+// seed is generated (and returned in stats.seed) so every board is
+// reproducible. `opts.rng` lets callers inject a custom `() => [0,1)` and
+// takes precedence over `seed`; in that case stats.seed is null.
+export const generateUniqueBoard = (N, opts = {}) => {
+    const seedValue =
+        opts.rng != null
+            ? null
+            : opts.seed != null
+              ? opts.seed >>> 0
+              : randomSeed();
+    const rng = opts.rng ?? mulberry32(seedValue);
     const NN = N * N;
     const regionGrid = new Int8Array(NN); // region id 0..N-1, or -1 for empty
     const queenCols = new Int8Array(N); // queenCols[row] = column of queen
@@ -42,7 +57,7 @@ export const generateUniqueBoard = (N) => {
             const order = [];
             for (let i = 0; i < N; i++) order.push(i);
             for (let i = N - 1; i > 0; i--) {
-                const j = (Math.random() * (i + 1)) | 0;
+                const j = (rng() * (i + 1)) | 0;
                 const t = order[i];
                 order[i] = order[j];
                 order[j] = t;
@@ -98,7 +113,7 @@ export const generateUniqueBoard = (N) => {
             }
         }
         while (qLen > 0) {
-            const idx = (Math.random() * qLen) | 0;
+            const idx = (rng() * qLen) | 0;
             const x = fillQX[idx];
             const y = fillQY[idx];
             const r = fillQR[idx];
@@ -339,17 +354,9 @@ export const generateUniqueBoard = (N) => {
         if (tryAttempt()) break;
     }
 
-    // Project regionGrid → 2D color grid with one random hex color per region.
-    const colors = new Array(N);
-    for (let i = 0; i < N; i++) {
-        colors[i] = `#${Math.random().toString(16).substring(2, 8)}`;
-    }
-    const grid = Array.from({ length: N }, () => new Array(N));
-    for (let y = 0; y < N; y++) {
-        for (let x = 0; x < N; x++) {
-            grid[y][x] = colors[regionGrid[y * N + x]];
-        }
-    }
+    // Colors come from the board's own identity (boardKey), so newly
+    // generated and reloaded boards always render identically.
+    const grid = regionIdsToColorGrid(regionGrid, N);
 
     return {
         grid,
@@ -357,6 +364,7 @@ export const generateUniqueBoard = (N) => {
             attempts,
             reshapes: totalReshapes,
             elapsedMs: performance.now() - start,
+            seed: seedValue,
         },
     };
 };
