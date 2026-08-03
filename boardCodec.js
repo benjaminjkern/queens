@@ -126,17 +126,143 @@ const mulberry32 = (seed) => {
     };
 };
 
-// N region colors derived deterministically from the boardKey so identical
-// boards always render identically regardless of how they were loaded.
-export const colorsFromKey = (boardKey, N) => {
-    const rng = mulberry32(hexPrefixToUint32(boardKey));
-    const out = new Array(N);
-    for (let i = 0; i < N; i++) {
-        out[i] = `#${Math.floor(rng() * 0x1000000)
+const hslToHex = (h, s, l) => {
+    const f = (n) => {
+        const k = (n + h / 30) % 12;
+        const c =
+            l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+        return Math.round(c * 255)
             .toString(16)
-            .padStart(6, "0")}`;
+            .padStart(2, "0");
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
+};
+
+const hslToRgb = (h, s, l) => {
+    const f = (n) => {
+        const k = (n + h / 30) % 12;
+        return (
+            l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1))
+        );
+    };
+    return [f(0) * 255, f(8) * 255, f(4) * 255];
+};
+
+// Perceptual-ish distance: weighted RGB euclidean (green weighted heaviest,
+// matching eye sensitivity). Hue-based distance overrates the purple/pink
+// zone; this tracks "do these look alike" much better.
+const colorDist = (a, b) => {
+    const dr = a.rgb[0] - b.rgb[0];
+    const dg = a.rgb[1] - b.rgb[1];
+    const db = a.rgb[2] - b.rgb[2];
+    return Math.sqrt(2 * dr * dr + 4 * dg * dg + 3 * db * db);
+};
+
+// Assign one color per region, deterministically from the boardKey, such
+// that (a) every color is light enough that the black ✗/👑 glyphs stay
+// readable, and (b) regions that touch (incl. diagonally) get visually
+// distinct colors.
+//
+// Method: build a palette of N evenly-spaced hues (random rotation +
+// small jitter, lightness clamped to a bright band), then greedily hand
+// palette entries to regions — most-constrained (highest-degree) region
+// first, each picking the unused entry farthest from its already-colored
+// neighbors. Everything is driven by the boardKey-seeded rng, so the same
+// board always renders identically regardless of how it was loaded.
+const colorsForRegions = (key, canonical, N) => {
+    const rng = mulberry32(hexPrefixToUint32(key));
+
+    const baseHue = rng() * 360;
+    const jitter = (120 / N) * 0.5;
+    const palette = new Array(N);
+    for (let i = 0; i < N; i++) {
+        const h =
+            (baseHue + (360 * i) / N + (rng() * 2 - 1) * jitter + 360) % 360;
+        const s = 0.55 + rng() * 0.3;
+        const l = 0.68 + rng() * 0.14;
+        palette[i] = { h, s, l, rgb: hslToRgb(h, s, l) };
     }
-    return out;
+
+    // Region adjacency (8-adjacent cells count as touching — corner-touching
+    // regions still read as side-by-side).
+    const neighbors = Array.from({ length: N }, () => new Set());
+    for (let y = 0; y < N; y++) {
+        for (let x = 0; x < N; x++) {
+            const a = canonical[y * N + x];
+            for (const [dx, dy] of [[1, 0], [0, 1], [1, 1], [-1, 1]]) {
+                const nx = x + dx;
+                const ny = y + dy;
+                if (nx < 0 || nx >= N || ny >= N) continue;
+                const b = canonical[ny * N + nx];
+                if (a !== b) {
+                    neighbors[a].add(b);
+                    neighbors[b].add(a);
+                }
+            }
+        }
+    }
+
+    // Highest-degree regions choose first, while the palette is still full.
+    const order = Array.from({ length: N }, (_, i) => i).sort(
+        (a, b) => neighbors[b].size - neighbors[a].size || a - b,
+    );
+    const assigned = new Array(N).fill(-1);
+    const used = new Array(N).fill(false);
+    for (const region of order) {
+        let best = -1;
+        let bestScore = -1;
+        for (let p = 0; p < N; p++) {
+            if (used[p]) continue;
+            let score = Infinity;
+            for (const nb of neighbors[region]) {
+                if (assigned[nb] < 0) continue;
+                score = Math.min(score, colorDist(palette[p], palette[assigned[nb]]));
+            }
+            if (score === Infinity) score = 1000 + rng(); // no colored neighbor yet
+            if (score > bestScore) {
+                bestScore = score;
+                best = p;
+            }
+        }
+        assigned[region] = best;
+        used[best] = true;
+    }
+
+    // Greedy can still strand a late region next to a look-alike (it picks
+    // from palette leftovers). Hill-climb: while some touching pair is the
+    // weakest link, try swapping any two regions' palette entries and keep
+    // the swap that raises the overall worst-pair distance. N ≤ 15, so this
+    // is at most a few hundred cheap evaluations. Fully deterministic.
+    const pairs = [];
+    for (let a = 0; a < N; a++)
+        for (const b of neighbors[a]) if (a < b) pairs.push([a, b]);
+    const worstDist = () => {
+        let m = Infinity;
+        for (const [a, b] of pairs)
+            m = Math.min(m, colorDist(palette[assigned[a]], palette[assigned[b]]));
+        return m;
+    };
+    for (let iter = 0; iter < 50; iter++) {
+        const base = worstDist();
+        let bestGain = base;
+        let bestSwap = null;
+        for (let a = 0; a < N; a++) {
+            for (let b = a + 1; b < N; b++) {
+                [assigned[a], assigned[b]] = [assigned[b], assigned[a]];
+                const d = worstDist();
+                [assigned[a], assigned[b]] = [assigned[b], assigned[a]];
+                if (d > bestGain) {
+                    bestGain = d;
+                    bestSwap = [a, b];
+                }
+            }
+        }
+        if (!bestSwap) break;
+        const [a, b] = bestSwap;
+        [assigned[a], assigned[b]] = [assigned[b], assigned[a]];
+    }
+
+    return assigned.map((p) => hslToHex(palette[p].h, palette[p].s, palette[p].l));
 };
 
 // Build a 2D color-string grid from any int region-id grid (canonical or
@@ -147,7 +273,7 @@ export const regionIdsToColorGrid = (regionIds, N) => {
     packed[0] = N;
     packed.set(canonical, 1);
     const key = fnv1a64(packed);
-    const colors = colorsFromKey(key, N);
+    const colors = colorsForRegions(key, canonical, N);
     const grid = Array.from({ length: N }, () => new Array(N));
     for (let y = 0; y < N; y++) {
         for (let x = 0; x < N; x++) {

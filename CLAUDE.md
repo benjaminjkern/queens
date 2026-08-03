@@ -128,6 +128,16 @@ means freshly-generated and loaded-from-URL boards always render with
 identical colors — `generation.js` calls `regionIdsToColorGrid` for its
 final step, and `boardCodec.decodeBoard` callers do the same.
 
+Color assignment is shape-aware (`colorsForRegions` in boardCodec.js):
+palette entries are evenly-spaced hues with lightness clamped to a bright
+band (worst-case contrast vs the black ✗/👑 glyphs is ~6:1), and touching
+regions (8-adjacency) are kept visually distinct via a greedy
+most-constrained-first assignment plus a swap hill-climb maximizing the
+worst adjacent-pair distance (weighted-RGB metric). All driven by the
+boardKey-seeded rng, so determinism is preserved. Colors are never
+persisted — the store and `#b=` URLs hold shapes only, so changing this
+function never corrupts saved data; it only re-skins old boards.
+
 Implication: if you change the color-derivation function, every previously
 shared board changes color. The region shapes are still correct, but
 visual identity isn't preserved across that change.
